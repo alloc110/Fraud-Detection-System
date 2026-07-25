@@ -27,7 +27,7 @@ def insert_1000_users():
 
             print("⏳ Đang chuẩn bị dữ liệu cho 9000 người dùng...")
             users_data = []
-            for _ in range(1000, 10000):
+            for _ in range(1000, 10001):
                   user_id = f"user_{_}"
                   full_name = fake.name()
                   # Theo yêu cầu amount là VARCHAR(20)
@@ -63,6 +63,7 @@ with DAG(
     default_args=default_args,
     description='Tạo dữ liệu ảo PaySim và đẩy vào Postgres Bronze Layer',
     start_date=datetime(2026, 2, 1),
+    schedule_interval='@once',
     catchup=False
 ) as dag:
 

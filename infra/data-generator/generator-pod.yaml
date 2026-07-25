@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: data-generator-pod
+  namespace: stream
+spec:
+  restartPolicy: Always 
+  containers:
+  - name: python-generator
+    image: python:3.9-slim 
+    imagePullPolicy: IfNotPresent
+    command: ["/bin/sh", "-c"]
+    # 1. Sửa đường dẫn gọi file thành absolute path (/app/data-generator.py)
+    args:
+      - pip install --no-cache-dir psycopg2-binary Faker && python -u /app/data-generator.py
+    env:
+    - name: DB_HOST
+      value: "postgres-service.data-storage.svc.cluster.local" 
+    - name: DB_PORT
+      value: "5432"
+    - name: DB_NAME
+      value: "ecom_Db"
+    - name: DB_USER
+      value: "hiveuser"
+    - name: DB_PASS
+      value: "hivepassword"
+    - name: BATCH_SIZE_PER_SEC
+      value: "20"
+    volumeMounts:
+    - name: script-volume
+      # 2. Sửa mountPath cho khớp với file được gọi ở trên
+      mountPath: /app/data-generator.py
+      # (Đảm bảo lúc tạo ConfigMap, file của bạn tên đúng là data-generator.py)
+      subPath: data-generator.py
+  volumes:
+  - name: script-volume
+    configMap:
+      name: generator-script

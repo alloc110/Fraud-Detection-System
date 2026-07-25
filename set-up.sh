@@ -54,9 +54,9 @@ echo -e "${GREEN}⚙️ Cài đặt Flink...${NC}"
 kubectl delete configmap flink-config -n stream || true
 kubectl create configmap flink-config \
   --from-file=flink-conf.yaml=infra/flink/flink-config.yaml \
-  --from-file=fraud_model.json=FlinkData/fraud_model.json \
-  --from-file=fraud_prediction.py=FlinkData/fraud_prediction.py \
-  --from-file=init.sql=FlinkData/init.sql \
+  --from-file=fraud_model.json=flink_service/fraud_model.json \
+  --from-file=fraud_prediction.py=flink_service/fraud_prediction.py \
+  --from-file=init.sql=flink_service/init.sql \
   -n stream
 
 kubectl apply -f infra/flink/ -n stream
@@ -78,8 +78,20 @@ kubectl create rolebinding airflow-worker-stream-admin \
   --serviceaccount=orchestration:airflow-worker \
   --namespace=stream || true
 
+echo "🚀 Đang triển khai Data Generator vào namespace 'stream'..."
+
+# 1. Đảm bảo namespace stream đã tồn tại (nếu setup.sh chưa có)
+kubectl create namespace stream --dry-run=client -o yaml | kubectl apply -f -
+
+echo "📦 Đang nạp file data-generator.py vào ConfigMap..."
+kubectl create configmap generator-script --from-file=./infra/data-generator/data-generator.py -n stream --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f ./infra/data-generator/generator-pod.yaml
+echo "✅ Đã cài đặt xong Data Generator!"
+echo "👉 Để xem log, hãy chạy: kubectl logs -f data-generator-pod -n stream"
+
+
 echo -e "${BLUE}✅ ĐÃ CÀI ĐẶT XONG! Đợi các Pod chuyển sang trạng thái Running.${NC}"
 echo -e "${BLUE}🔗 Truy cập nhanh:${NC}"
 echo "- Flink UI: http://$(minikube ip):30081"
 echo "- Grafana: http://$(minikube ip):$(kubectl get svc -n monitoring monitor-stack-grafana -o jsonpath='{.spec.ports[0].nodePort}')"
-echo "- Airflow: Lộc dùng lệnh 'kubectl port-forward -n orchestration svc/airflow-webserver 8080:8080' để vào UI"
+echo "- Airflow: Lộc dùng lệnh ' kubectl port-forward svc/airflow-api-server 8080:8080 --namespace orchestration' để vào UI"

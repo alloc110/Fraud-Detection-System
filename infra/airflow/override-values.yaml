@@ -77,7 +77,7 @@ dags:
     rev: "HEAD"
     depth: 1
     wait: 60
-    subPath: "Dags"
+    subPath: "dags"
 
   # Giữ nguyên các phần resources/replicas của bạn...
 

@@ -1,4 +1,5 @@
 *.csv
 *.vscode
 *.idea
-
+*.log
+*.env
