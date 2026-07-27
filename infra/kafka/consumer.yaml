@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-detector-consumer
+  labels:
+    app: fraud-detector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-detector
+  template:
+    metadata:
+      labels:
+        app: fraud-detector
+    spec:
+      containers:
+      - name: consumer
+        image: allocknguyen/finhouse-fraud-consumer:v1
+        imagePullPolicy: Always
+        env:
+          # --- Cấu hình Kafka ---
+          - name: KAFKA_BOOTSTRAP_SERVERS
+            value: "my-cluster-kafka-bootstrap:9092"
+          - name: KAFKA_TOPIC
+            value: "pg.public.transactions"
+          - name: KAFKA_GROUP_ID
+            value: "redis-fraud-detector-group"
+          # --- Cấu hình Redis ---
+          - name: REDIS_HOST
+            value: "redis" 
+          - name: REDIS_PORT
+            value: "6379"
+          # --- Cấu hình Logic Nghiệp vụ ---
+          - name: FRAUD_THRESHOLD
+            value: "5"  # Nếu muốn đổi luật thành 10 lần/5 phút, chỉ cần sửa ở đây!
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"

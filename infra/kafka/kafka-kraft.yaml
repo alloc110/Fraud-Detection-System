@@ -17,7 +17,9 @@ spec:
       transaction.state.log.replication.factor: 1
       min.insync.replicas: 1
     storage:
-      type: ephemeral # Dùng ephemeral để không bao giờ bị lỗi unbound PVC
+      type: persistent-claim
+      size: 10Gi # Cấp 10GB không gian riêng cho Kafka
+      deleteClaim: false # (Tùy chọn) Giữ lại dữ liệu kể cả khi bạn lỡ tay xóa cụm Kafka
   entityOperator:
     topicOperator: {}
     userOperator: {}

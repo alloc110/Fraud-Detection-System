@@ -63,7 +63,6 @@ with DAG(
     default_args=default_args,
     description='Tạo dữ liệu ảo PaySim và đẩy vào Postgres Bronze Layer',
     start_date=datetime(2026, 2, 1),
-    schedule_interval='@once',
     catchup=False
 ) as dag:
 
