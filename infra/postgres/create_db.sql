@@ -7,6 +7,7 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE DATABASE mlflow_db;
 
 -- 3. Bảng Giao dịch (Nơi luồng data tuôn chảy liên tục)
 DROP TABLE IF EXISTS transactions CASCADE;

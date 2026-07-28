@@ -49,12 +49,16 @@ kubectl apply -f infra/kafka/ -n stream
 # 6. Cài đặt Flink (JobManager & TaskManager)
 echo -e "${GREEN}🌊 Cài đặt Apache Flink...${NC}"
 kubectl create configmap flink-config \
-  --from-file=flink-conf.yaml=./infra/flink/flink-config.yaml \
-  --from-file=fraud_prediction.py=./flink_service/fraud_prediction.py \
-  --from-file=init.sql=./flink_service/init.sql \
+   --from-file=flink-conf.yaml=infra/flink/flink-conf.yaml \
+  --from-file=fraud_prediction.py=flink_service/fraud_prediction.py \
+  --from-file=init.sql=flink_service/init.sql \
   -n stream --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl apply -f infra/flink/ -n stream
+kubectl apply -f infra/flink/configmap.yaml -n stream
+kubectl apply -f infra/flink/deployment.yaml -n stream
+kubectl apply -f infra/flink/flink-conf.yaml -n stream  --validate=false 
+kubectl apply -f infra/flink/taskmanager.yaml -n stream
+kubectl apply -f infra/flink/ui-jobmanager.yaml -n stream
 
 # 7. Cài đặt Monitoring (Prometheus & Grafana)
 echo -e "${GREEN}📊 Cài đặt Monitoring Stack...${NC}"
@@ -82,6 +86,9 @@ kubectl create configmap generator-script \
   -n stream --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f ./infra/data-generator/generator-pod.yaml
+
+# 10 Cai dat MLflow
+ kubectl apply -f ./infra/mlflow -n ml-model  
 
 # --- TỔNG KẾT ---
 echo -e "${BLUE}✅ ĐÃ CÀI ĐẶT XONG! Hệ thống đang pull image và khởi tạo.${NC}"

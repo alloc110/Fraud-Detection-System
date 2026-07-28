@@ -27,7 +27,7 @@ spec:
 
       - name: mlflow
 
-        image: ghcr.io/mlflow/mlflow:v2.14.3
+        image: allocknguyen/mlflow:latest
 
         command:
           - mlflow

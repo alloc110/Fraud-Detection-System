@@ -14,7 +14,7 @@
 -- 2. BẢNG KAFKA (DỮ LIỆU GIAO DỊCH REAL-TIME)
 -- =================================================================
 DROP TABLE IF EXISTS kafka_transactions;
- CREATE TABLE IF NOT EXISTS kafka_transactions (
+CREATE TABLE IF NOT EXISTS kafka_transactions (
     step INT,
     transaction_id STRING,
     user_id STRING,
@@ -22,7 +22,7 @@ DROP TABLE IF EXISTS kafka_transactions;
     amount BIGINT,
     payment_method STRING,
     proctime AS PROCTIME()
- ) WITH (
+) WITH (
     'connector' = 'kafka',
     'topic' = 'pg.public.transactions',
     'properties.bootstrap.servers' = 'my-cluster-kafka-bootstrap:9092', 
@@ -30,7 +30,7 @@ DROP TABLE IF EXISTS kafka_transactions;
     'scan.startup.mode' = 'earliest-offset',
     'format' = 'debezium-json','debezium-json.schema-include' = 'true', 
     'debezium-json.ignore-parse-errors' = 'true' 
- );
+);
 
 
 
@@ -52,50 +52,32 @@ CREATE TABLE IF NOT EXISTS pg_users (
 );
 
 -- =================================================================
--- 4. BẢNG MINIO (LƯU TRỮ PARQUET VĨNH VIỄN)
--- =================================================================
--- CREATE TABLE IF NOT EXISTS minio_transactions_parquet (
---     step INT,
---     transaction_id STRING,
---     amount DOUBLE,
---     type_code INT, 
---     isFraud INT,
---     dt STRING
--- ) PARTITIONED BY (dt)
--- WITH (
---     'connector' = 'filesystem',
---     'path' = 's3a://flink-data/transactions_archive/',
---     'format' = 'parquet'
--- );
-
-
--- =================================================================
 -- 5. SELECT TEST (KIỂM TRA JOIN GIỮA KAFKA VÀ POSTGRES)
 -- =================================================================
-SELECT 
-    t.transaction_id,
-    t.user_id AS user_id,
-    t.amount AS transaction_amount,
-    u_sor.current_balance AS SOURCE_USER_OLD_BALANCE, 
-    CASE 
-        WHEN t.payment_method = 'CASH_OUT' OR t.payment_method = 'TRANSFER' OR t.payment_method = 'DEBIT' THEN u_sor.current_balance - t.amount 
-        ELSE (u_sor.current_balance + t.amount) -- Nếu là rút tiền hoặc chuyển tiền thì số dư mới sẽ là số dư cũ trừ đi số tiền giao dịch
-    END AS SOURCE_USER_NEW_BALANCE,
-    u_des.current_balance AS DEST_USER_OLD_BALANCE,
-    CASE 
-        WHEN t.payment_method = 'CASH_OUT' OR t.payment_method = 'TRANSFER' OR t.payment_method = 'DEBIT' THEN u_des.current_balance + t.amount 
-        ELSE (u_des.current_balance - t.amount)
-    END AS DEST_USER_NEW_BALANCE,
-    t.payment_method as TYPE
-FROM kafka_transactions t
-LEFT JOIN pg_users FOR SYSTEM_TIME AS OF t.proctime AS u_sor -- Temporal Join
-ON t.user_id = u_sor.user_id
-LEFT JOIN pg_users FOR SYSTEM_TIME AS OF t.proctime AS u_des -- Temporal Join
-ON t.dest_user_id = u_des.user_id;
+-- SELECT 
+--     t.transaction_id,
+--     t.user_id AS user_id,
+--     t.amount AS transaction_amount,
+--     u_sor.current_balance AS SOURCE_USER_OLD_BALANCE, 
+--     CASE 
+--         WHEN t.payment_method = 'CASH_OUT' OR t.payment_method = 'TRANSFER' OR t.payment_method = 'DEBIT' THEN u_sor.current_balance - t.amount 
+--         ELSE (u_sor.current_balance + t.amount) -- Nếu là rút tiền hoặc chuyển tiền thì số dư mới sẽ là số dư cũ trừ đi số tiền giao dịch
+--     END AS SOURCE_USER_NEW_BALANCE,
+--     u_des.current_balance AS DEST_USER_OLD_BALANCE,
+--     CASE 
+--         WHEN t.payment_method = 'CASH_OUT' OR t.payment_method = 'TRANSFER' OR t.payment_method = 'DEBIT' THEN u_des.current_balance + t.amount 
+--         ELSE (u_des.current_balance - t.amount)
+--     END AS DEST_USER_NEW_BALANCE,
+--     t.payment_method as TYPE
+-- FROM kafka_transactions t
+-- LEFT JOIN pg_users FOR SYSTEM_TIME AS OF t.proctime AS u_sor -- Temporal Join
+-- ON t.user_id = u_sor.user_id
+-- LEFT JOIN pg_users FOR SYSTEM_TIME AS OF t.proctime AS u_des -- Temporal Join
+-- ON t.dest_user_id = u_des.user_id;
 
 -- =================================================================
 -- 6. ĐĂNG KÝ HÀM ML XGBOOST
 -- =================================================================
-CREATE TEMPORARY FUNCTION IF NOT EXISTS predict_fraud 
-AS 'fraud_prediction.predict_fraud' 
-LANGUAGE PYTHON;
+-- CREATE TEMPORARY FUNCTION IF NOT EXISTS predict_fraud 
+-- AS 'fraud_prediction.predict_fraud' 
+-- LANGUAGE PYTHON;

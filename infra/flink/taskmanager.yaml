@@ -41,6 +41,23 @@ spec:
             - name: flink-config-volume
               mountPath: /opt/flink/usrlib/fraud_model.json
               subPath: fraud_model.json
+          env:
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager
+                jobmanager.rpc.port: 6123
+                jobmanager.memory.process.size: 1024m
+                jobmanager.bind-host: 0.0.0.0
+                rest.port: 8081
+                blob.server.port: 6124
+                parallelism.default: 2
+                state.backend: rocksdb
+                state.checkpoints.dir: file:///tmp/flink-checkpoints
+                execution.checkpointing.interval: 10s
+                s3.endpoint: http://my-minio.data-storage:9000
+                s3.access-key: admin
+                s3.secret-key: admin123
+                s3.path.style.access: true
       volumes:
         - name: config-volume
           configMap:
@@ -52,3 +69,4 @@ spec:
         - name: flink-config-volume
           configMap:
             name: flink-config
+          

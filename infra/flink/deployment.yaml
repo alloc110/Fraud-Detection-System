@@ -37,14 +37,29 @@ spec:
         - name: jobmanager
           image: allocknguyen/flink-ml-full:v3
           args: ["jobmanager"]
+          env:
+            - name: FLINK_PROPERTIES
+              value: |
+                jobmanager.rpc.address: flink-jobmanager
+                jobmanager.rpc.port: 6123
+                jobmanager.memory.process.size: 1024m
+                jobmanager.bind-host: 0.0.0.0
+                rest.port: 8081
+                blob.server.port: 6124
+                parallelism.default: 2
+                taskmanager.numberOfTaskSlots: 2
+                state.backend: rocksdb
+                state.checkpoints.dir: file:///tmp/flink-checkpoints
+                execution.checkpointing.interval: 10s
+                s3.endpoint: http://my-minio.data-storage:9000
+                s3.access-key: admin
+                s3.secret-key: admin123
+                s3.path.style.access: true
           ports:
             - containerPort: 6123 # RPC
             - containerPort: 8081 # REST UI
-            - containerPort: 6124 # Blob Server (Phải thêm cái này)
+            - containerPort: 6124 # Blob Server
           volumeMounts:
-            - name: config-volume
-              mountPath: /opt/flink/conf/flink-conf.yaml
-              subPath: flink-conf.yaml # Chỉ gắn file này
             - name: flink-config-volume
               mountPath: /opt/flink/usrlib/init.sql
               subPath: init.sql
@@ -62,12 +77,6 @@ spec:
               memory: "1Gi"
               cpu: "500m"
       volumes:
-        - name: config-volume
-          configMap:
-            name: flink-config
-            items:
-              - key: flink-conf.yaml
-                path: flink-conf.yaml
         - name: flink-config-volume
           configMap:
             name: flink-config
@@ -76,3 +85,5 @@ spec:
                 path: init.sql
               - key: fraud_prediction.py  
                 path: fraud_prediction.py
+              - key: fraud_model.json
+                path: fraud_model.json
