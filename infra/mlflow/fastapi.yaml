@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: fraud-model-api
+  namespace: ml-model
+
+spec:
+
+  replicas: 1
+
+  selector:
+
+    matchLabels:
+
+      app: fraud-model-api
+
+  template:
+
+    metadata:
+
+      labels:
+
+        app: fraud-model-api
+
+    spec:
+
+      containers:
+
+      - name: api
+
+        image: allocknguyen/fraud-fastapi:v3
+
+        imagePullPolicy: Always
+
+        ports:
+
+        - containerPort: 8000
+
+        env:
+
+        - name: MLFLOW_TRACKING_URI
+          value: http://mlflow-service:5000
+
+        - name: MODEL_NAME
+          value: fraud-model
+
+---
+
+apiVersion: v1
+
+kind: Service
+
+metadata:
+
+  name: fraud-model-service
+
+  namespace: ml-model
+
+spec:
+
+  selector:
+
+    app: fraud-model-api
+
+  ports:
+
+  - port: 8000
+
+    targetPort: 8000

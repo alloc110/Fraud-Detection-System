@@ -81,18 +81,6 @@ dags:
 
   # Giữ nguyên các phần resources/replicas của bạn...
 
-
-airflow:
-  connections:
-    - id: my_postgres_conn
-      type: postgres
-      host: postgres-service.data-storage.svc.cluster.local
-      login: hiveuser 
-      password: hivepassword
-      schema: public
-      port: 5432
-  
-
 # 1. Khai báo cho Helm tạo Secret (nếu dùng Helm chart mặc định)
 webserverSecretKey: "PP4RF2gNXxIABjQ1FroMOdO9JjdpAwdP"
 
@@ -122,5 +110,5 @@ worker:
 
 
 extraEnv: |
-  - name: my_postgres_conn
-    value: "postgres://hiveuser:hivepassword@postgres-service.data-storage.svc.cluster.local:5432/public"
+  - name: AIRFLOW_CONN_MY_POSTGRES_CONN
+    value: "postgres://hiveuser:hivepassword@postgres-service.data-storage.svc.cluster.local:5432/ecom_Db"

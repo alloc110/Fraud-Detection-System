@@ -76,5 +76,3 @@ spec:
                 path: init.sql
               - key: fraud_prediction.py  
                 path: fraud_prediction.py
-              - key: fraud_model.json      
-                path: fraud_model.json

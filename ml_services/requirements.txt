@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+mlflow
+boto3
+scikit-learn
+pandas
+numpy
+protobuf>=4.21.0,<5.0.0

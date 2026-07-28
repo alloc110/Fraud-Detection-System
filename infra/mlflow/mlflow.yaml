@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: mlflow
+  namespace: ml-model
+
+spec:
+
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: mlflow
+
+  template:
+
+    metadata:
+
+      labels:
+
+        app: mlflow
+
+    spec:
+
+      containers:
+
+      - name: mlflow
+
+        image: ghcr.io/mlflow/mlflow:v2.14.3
+
+        command:
+          - mlflow
+
+        args:
+
+          - server
+
+          - --host
+
+          - 0.0.0.0
+
+          - --port
+
+          - "5000"
+
+          - --backend-store-uri
+
+          - postgresql://hiveuser:hivepassword@postgres-service.data-storage.svc.cluster.local:5432/mlflow_db
+
+          - --artifacts-destination
+
+          - s3://mlflow
+
+        env:
+
+        - name: AWS_ACCESS_KEY_ID
+          value: admin
+
+        - name: AWS_SECRET_ACCESS_KEY
+          value: admin123
+
+        - name: MLFLOW_S3_ENDPOINT_URL
+          value: http://minio-service:9000
+
+        ports:
+
+        - containerPort: 5000
+
+---
+
+apiVersion: v1
+
+kind: Service
+
+metadata:
+
+  name: mlflow-service
+
+  namespace: ml-model
+
+spec:
+
+  selector:
+
+    app: mlflow
+
+  ports:
+
+  - port: 5000
+
+    targetPort: 5000

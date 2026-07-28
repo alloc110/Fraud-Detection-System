@@ -1,165 +1,156 @@
-import pandas as pd
-import xgboost as xgb
-import os
-import pandas as pd
-import numpy as np
-from pyflink.table.udf import udf
-from pyflink.table import DataTypes
-from pyflink.table import EnvironmentSettings, StreamTableEnvironment
+"""
+PyFlink DataStream job (ASYNC I/O version): consume transactions from Kafka
+and call the FastAPI /predict fraud-detection endpoint WITHOUT blocking the
+task thread for each request. This lets a single subtask have many
+in-flight HTTP requests at once, which is what you want under high traffic.
 
-settings = EnvironmentSettings.new_instance() \
-    .in_streaming_mode() \
-    .build()
+Requirements:
+    pip install apache-flink aiohttp
+"""
 
-# 2. Tạo Table Environment
-t_env = StreamTableEnvironment.create(environment_settings=settings)
-t_env.get_config().set("python.execution-mode", "process")
+import asyncio
+import json
+import logging
+
+import aiohttp
+from pyflink.common import Types
+from pyflink.common.serialization import SimpleStringSchema
+from pyflink.datastream import StreamExecutionEnvironment
+from pyflink.datastream.connectors.kafka import (
+    FlinkKafkaConsumer,
+    FlinkKafkaProducer,
+)
+from pyflink.datastream.functions import RuntimeContext
+from pyflink.datastream.async_wait import AsyncWaitOperator  # see note below
+from pyflink.datastream.functions import AsyncFunction
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+INPUT_TOPIC = "transactions"
+OUTPUT_TOPIC = "transactions.scored"
+CONSUMER_GROUP = "flink-fraud-detector"
+
+FRAUD_API_URL = "http://fraud-api:8000/predict"
+API_TIMEOUT_SECONDS = 2.0
+
+MAX_IN_FLIGHT_REQUESTS = 100     # concurrent requests per subtask
+ASYNC_TIMEOUT_MS = 5000          # per-request timeout enforced by Flink itself
 
 
-# (Tùy chọn) Cấu hình để Python UDF chạy mượt hơn trong K8s
-t_env.get_config().set("python.executable", "python3")
-
-MODEL_PATH = "/opt/flink/usrlib/fraud_model.json"
-
-# 2. Khởi tạo mô hình Global để tránh việc mỗi dòng dữ liệu lại load lại file (gây chậm)
-_model = None
-
-def get_model():
-    global _model
-    if _model is None:
-        _model = xgb.XGBClassifier()
-        if os.path.exists(MODEL_PATH):
-            _model.load_model(MODEL_PATH)
-        else:
-            # Fallback nếu không tìm thấy file để tránh crash Job Flink
-            print(f"Warning: Model file not found at {MODEL_PATH}")
-    return _model
-
-# 3. Mapping loại giao dịch (Phải khớp 100% với lúc Lộc train)
-TYPE_MAP = {
-    'PAYMENT': 0,
-    'TRANSFER': 1, 
-    'CASH_OUT': 2,
-    'DEBIT': 3, 
-    'CASH_IN': 4
-}
-
-@udf(result_type=DataTypes.INT(), 
-     input_types=[DataTypes.INT(), DataTypes.STRING(), DataTypes.BIGINT(), 
-                  DataTypes.BIGINT(), DataTypes.BIGINT(), DataTypes.BIGINT(), DataTypes.BIGINT()])
-def predict_fraud(step, type_str, amount, oldbalanceOrg, newbalanceOrig, oldbalanceDest, newbalanceDest):
+# ---------------------------------------------------------------------------
+# Async map function
+# ---------------------------------------------------------------------------
+class AsyncFraudScoringFunction(AsyncFunction):
     """
-    Hàm UDF để dự đoán gian lận cho từng dòng dữ liệu từ Flink SQL
+    Non-blocking version: opens one aiohttp.ClientSession per subtask and
+    reuses it for every request, letting many requests be in flight at once
+    instead of one-at-a-time.
     """
-    # Lấy mô hình
-    model = get_model()
-    if model is None:
-        return 0
 
-    try:
-        type_code = TYPE_MAP.get(type_str, 0)
-        # Sử dụng NumPy để đạt tốc độ cao nhất trong Flink
-        features = np.array([[step, type_code, int(amount), 
-                              int(oldbalanceOrg), int(newbalanceOrig), 
-                              int(oldbalanceDest), int(newbalanceDest)]])
-        
-        prediction = model.predict(features)
-        return int(prediction[0])
-    except Exception as e:
-        return 0
-    
-t_env.create_temporary_system_function("predict_fraud", predict_fraud) 
+    def open(self, runtime_context: RuntimeContext):
+        self.logger = logging.getLogger("AsyncFraudScoringFunction")
+        # one shared session + event loop per subtask instance
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.session = aiohttp.ClientSession(
+            loop=self.loop,
+            timeout=aiohttp.ClientTimeout(total=API_TIMEOUT_SECONDS),
+        )
 
-# Khai báo nguồn Kafka
-t_env.execute_sql("""
-    CREATE TABLE IF NOT EXISTS kafka_transactions (
-        step INT,
-        transaction_id STRING,
-        user_id STRING,
-        dest_user_id STRING,
-        amount BIGINT,
-        payment_method STRING,
-        proctime AS PROCTIME()
-    ) WITH (
-        'connector' = 'kafka',
-        'topic' = 'pg.public.transactions',
-        'properties.bootstrap.servers' = 'my-cluster-kafka-bootstrap:9092', 
-        'properties.group.id' = 'flink_production_group',
-        'scan.startup.mode' = 'earliest-offset',
-        'format' = 'debezium-json','debezium-json.schema-include' = 'true', -- THÊM DÒNG NÀY VÀO ĐÂY
-        'debezium-json.ignore-parse-errors' = 'true' -- Thêm dòng này để bỏ qua nếu có tin nhắn lỗi
+    def close(self):
+        self.loop.run_until_complete(self.session.close())
+        self.loop.close()
+
+    async def _score(self, tx: dict) -> dict:
+        payload = {
+            "step": tx.get("step"),
+            "transaction_id": tx.get("transaction_id"),
+            "source_user_id": tx.get("user"),
+            "dest_user_id": tx.get("user_dest"),
+            "amount": tx.get("amount"),
+            "payment_method": tx.get("method"),
+            "transaction_time": tx.get("tx_time"),
+        }
+        try:
+            async with self.session.post(FRAUD_API_URL, json=payload) as resp:
+                resp.raise_for_status()
+                return await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.logger.error("Fraud API call failed for %s: %s",
+                               payload.get("transaction_id"), e)
+            return {
+                "transaction_id": payload.get("transaction_id"),
+                "error": "api_call_failed",
+                "detail": str(e),
+            }
+
+    async def async_invoke(self, value: str, result_future):
+        """
+        Called by Flink's async I/O operator. Must resolve `result_future`
+        with a list containing the output record(s) — never block here.
+        """
+        try:
+            tx = json.loads(value)
+        except json.JSONDecodeError:
+            result_future.complete([json.dumps({"error": "invalid_json", "raw": value})])
+            return
+
+        result = await self._score(tx)
+        enriched = {**tx, **result}
+        result_future.complete([json.dumps(enriched)])
+
+
+# ---------------------------------------------------------------------------
+# Job definition
+# ---------------------------------------------------------------------------
+def build_job():
+    env = StreamExecutionEnvironment.get_execution_environment()
+    env.set_parallelism(4)
+
+    kafka_consumer = FlinkKafkaConsumer(
+        topics=INPUT_TOPIC,
+        deserialization_schema=SimpleStringSchema(),
+        properties={
+            "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
+            "group.id": CONSUMER_GROUP,
+        },
     )
-""")
 
-# Khai báo nguồn Postgres (Lookup Table)
-t_env.execute_sql("""
-    CREATE TABLE IF NOT EXISTS pg_users (
-        user_id STRING,
-        amount BIGINT, -- Khai báo đúng kiểu VARCHAR bên Postgres
-        -- Tạo cột số để dùng cho XGBoost
-        current_balance AS amount,
-        PRIMARY KEY (user_id) NOT ENFORCED
-    ) WITH (
-        'connector' = 'jdbc',
-        'url' = 'jdbc:postgresql://postgres-service.data-storage:5432/ecom_Db', 
-        'table-name' = 'users',
-        'username' = 'hiveuser',
-        'password' = 'hivepassword'
+    kafka_producer = FlinkKafkaProducer(
+        topic=OUTPUT_TOPIC,
+        serialization_schema=SimpleStringSchema(),
+        producer_config={"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS},
     )
-""")
 
-t_env.execute_sql("""
-    CREATE TABLE IF NOT EXISTS fraud_results_sink (
-        transaction_id STRING,
-        user_id STRING,
-        amount DOUBLE,
-        payment_method STRING,
-        is_fraud_predicted INT,
-        alert_time TIMESTAMP(3),
-        PRIMARY KEY (transaction_id) NOT ENFORCED
-    ) WITH (
-        'connector' = 'jdbc',
-        'url' = 'jdbc:postgresql://postgres-service.data-storage:5432/ecom_Db', 
-        'table-name' = 'fraud_alerts', -- Ghi vào bảng mới có cột feedback
-        'username' = 'hiveuser',
-        'password' = 'hivepassword',
-        'sink.buffer-flush.max-rows' = '1' -- Đẩy dữ liệu đi ngay lập tức khi có kết quả
-    )
-""")
+    stream = env.add_source(kafka_consumer)
 
-# 5. Thực hiện truy vấn Flink SQL để:
-t_env.execute_sql("""
-    INSERT INTO fraud_results_sink
-    SELECT 
-        transaction_id,
-        user_id,
-        CAST(transaction_amount AS DOUBLE),
-        payment_method,
-        predict_fraud(
-            step, 
-            payment_method, 
-            transaction_amount, 
-            SOURCE_USER_OLD_BALANCE, 
-            SOURCE_USER_NEW_BALANCE, 
-            DEST_USER_OLD_BALANCE, 
-            DEST_USER_NEW_BALANCE
-        ) AS is_fraud_predicted,
-        CURRENT_TIMESTAMP AS alert_time
-    FROM (
-        SELECT 
-            t.step, t.transaction_id, t.user_id, t.amount AS transaction_amount, t.payment_method,
-            COALESCE(u_sor.amount, 0) AS SOURCE_USER_OLD_BALANCE,
-            CASE 
-                WHEN t.payment_method IN ('CASH_OUT', 'TRANSFER', 'DEBIT') THEN COALESCE(u_sor.amount, 0) - t.amount 
-                ELSE COALESCE(u_sor.amount, 0) + t.amount 
-            END AS SOURCE_USER_NEW_BALANCE,
-            COALESCE(u_des.amount, 0) AS DEST_USER_OLD_BALANCE,
-            CASE 
-                WHEN t.payment_method IN ('CASH_OUT', 'TRANSFER', 'DEBIT') THEN COALESCE(u_des.amount, 0) + t.amount 
-                ELSE COALESCE(u_des.amount, 0) - t.amount
-            END AS DEST_USER_NEW_BALANCE
-        FROM kafka_transactions t
-        LEFT JOIN pg_users FOR SYSTEM_TIME AS OF t.proctime AS u_sor ON t.user_id = u_sor.user_id
-        LEFT JOIN pg_users FOR SYSTEM_TIME AS OF t.proctime AS u_des ON t.dest_user_id = u_des.user_id
+    # NOTE: PyFlink's Python Table/DataStream API historically has had
+    # limited/unstable support for AsyncFunction compared to the Java API.
+    # If `AsyncWaitOperator` isn't available in your PyFlink version, the
+    # more reliable path is:
+    #   1. Write this scoring function in Java/Scala using
+    #      org.apache.flink.streaming.api.datastream.AsyncDataStream, or
+    #   2. Stay on the synchronous MapFunction version but scale out
+    #      parallelism + run a small pool of API replicas behind a
+    #      load balancer, or
+    #   3. Batch records in a window and call a `/predict_batch` endpoint,
+    #      cutting the number of HTTP round-trips drastically.
+    # Check `pyflink.datastream.async_wait` availability for your version
+    # before relying on this file as-is.
+    from pyflink.datastream.async_wait import AsyncDataStream
+
+    scored = AsyncDataStream.unordered_wait(
+        stream,
+        AsyncFraudScoringFunction(),
+        ASYNC_TIMEOUT_MS,
+        capacity=MAX_IN_FLIGHT_REQUESTS,
     )
-""")
+
+    scored.add_sink(kafka_producer)
+    env.execute("fraud-detection-scoring-job-async")
+
+
+if __name__ == "__main__":
+    build_job()

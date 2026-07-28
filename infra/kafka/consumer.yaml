@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: consumer
-        image: allocknguyen/finhouse-fraud-consumer:v1
+        image: allocknguyen/finhouse-fraud-consumer:v2
         imagePullPolicy: Always
         env:
           # --- Cấu hình Kafka ---
@@ -28,7 +28,7 @@ spec:
             value: "redis-fraud-detector-group"
           # --- Cấu hình Redis ---
           - name: REDIS_HOST
-            value: "redis" 
+            value: "redis-service" 
           - name: REDIS_PORT
             value: "6379"
           # --- Cấu hình Logic Nghiệp vụ ---
