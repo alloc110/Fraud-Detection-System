@@ -22,15 +22,24 @@ import os
 import mlflow
 import mlflow.xgboost
 
+from mlflow import MlflowClient
+
+client = MlflowClient()
 logger = logging.getLogger("model_loader")
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "fraud-xgb")
-MODEL_STAGE = os.environ.get("MODEL_STAGE", "Production")
+MODEL_NAME = os.environ.get("MODEL_NAME", "fraud-model")
+MODEL_VERSION = os.environ.get("MODEL_VERSION")
+MODEL_ALIAS = os.environ.get("MODEL_ALIAS")
 
+versions = client.search_model_versions(
+    f"name='{MODEL_NAME}'"
+)
 
+latest = max(versions, key=lambda v: int(v.version))
+
+model_uri = f"models:/{MODEL_NAME}/{latest.version}"
 class ModelLoadError(Exception):
     """Raised when the model cannot be loaded from MLflow/MinIO."""
-
 
 def load_model():
     """
@@ -44,7 +53,7 @@ def load_model():
 
     mlflow.set_tracking_uri(tracking_uri)
 
-    model_uri = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
+    model_uri = f"models:/{MODEL_NAME}/{latest.version}"
 
     try:
         logger.info("Loading model from %s (tracking_uri=%s)", model_uri, tracking_uri)
@@ -52,9 +61,8 @@ def load_model():
         logger.info("Model loaded successfully: %s", model_uri)
         return model
     except mlflow.exceptions.MlflowException as e:
-        # Covers: model/version/stage not found in the registry
         raise ModelLoadError(
-            f"Could not find model '{MODEL_NAME}' at stage '{MODEL_STAGE}' "
+            f"Could not find model '{MODEL_NAME}' at version '{versions}' "
             f"in MLflow registry: {e}"
         ) from e
     except Exception as e:

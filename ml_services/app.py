@@ -1,12 +1,13 @@
 import logging
 from datetime import datetime
 from enum import Enum
-
+import xgboost as xgb
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from model_loader import ModelLoadError, load_model
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fraud-api")
@@ -16,12 +17,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# ---------------------------------------------------------------------------
-# Model loading: don't let a bad load crash the whole app at import time.
-# Instead, keep `model = None` and let /health and /predict report the
-# real state, so the process can still start (useful behind k8s readiness
-# probes / for debugging) instead of crash-looping with no visibility.
-# ---------------------------------------------------------------------------
 model = None
 model_load_error = None
 
@@ -37,13 +32,15 @@ class PaymentMethod(str, Enum):
     CASH_OUT = "CASH_OUT"
     PAYMENT = "PAYMENT"
     DEBIT = "DEBIT"
+    CASH_IN = "CASH_IN"
 
 
 PAYMENT_METHOD_ENCODING = {
-    PaymentMethod.TRANSFER: 0,
-    PaymentMethod.CASH_OUT: 1,
-    PaymentMethod.PAYMENT: 2,
+    PaymentMethod.TRANSFER: 1,
+    PaymentMethod.CASH_OUT: 2,
+    PaymentMethod.PAYMENT: 0,
     PaymentMethod.DEBIT: 3,
+    PaymentMethod.CASH_IN: 4,
 }
 
 
@@ -54,9 +51,13 @@ class Transaction(BaseModel):
     dest_user_id: str
     amount: float = Field(gt=0, description="Transaction amount, must be positive")
     payment_method: PaymentMethod
-    # Milliseconds since epoch. Change the divisor in `predict()` below if
-    # your upstream (Flink) sends a different unit.
-    transaction_time: int = Field(gt=0)
+    transaction_time: int = Field(gt=0, description="Milliseconds since epoch")
+    
+    # Bổ sung các trường số dư (balance) theo yêu cầu hàm predict_fraud
+    src_old_bal: float = Field(ge=0, description="Source account balance before transaction")
+    src_new_bal: float = Field(ge=0, description="Source account balance after transaction")
+    dest_old_bal: float = Field(ge=0, description="Destination account balance before transaction")
+    dest_new_bal: float = Field(ge=0, description="Destination account balance after transaction")
 
 
 @app.get("/")
@@ -66,10 +67,6 @@ def root():
 
 @app.get("/health")
 def health():
-    """
-    Real health check: reports whether the model is actually loaded and
-    usable, not just whether the process is alive.
-    """
     if model is None:
         raise HTTPException(
             status_code=503,
@@ -90,43 +87,43 @@ def predict(tx: Transaction):
         )
 
     try:
-        # NOTE: assumes tx.transaction_time is milliseconds since epoch.
-        # Adjust the divisor here if your upstream sends seconds or
-        # microseconds instead — this must match whatever Flink sends.
         dt = datetime.fromtimestamp(tx.transaction_time / 1000)
         hour = dt.hour
 
-        payment_method_encoded = PAYMENT_METHOD_ENCODING[tx.payment_method]
+        # Map tx_type (payment_method) sang giá trị số nguyên nếu mô hình yêu cầu dạng encoded
+        tx_type_encoded = PAYMENT_METHOD_ENCODING[tx.payment_method]
 
+        # Xây dựng DataFrame chứa đúng các đặc trưng theo chữ ký:
+        # predict_fraud(amount, src_old_bal, src_new_bal, dest_old_bal, dest_new_bal, tx_type)
         df = pd.DataFrame([{
+           "step": tx.step,
+            "type": tx_type_encoded,
             "amount": tx.amount,
-            "hour": hour,
-            "payment_method": payment_method_encoded,
+            "oldbalanceOrg": tx.src_old_bal,
+            "newbalanceOrig": tx.src_new_bal,
+            "oldbalanceDest": tx.dest_old_bal,
+            "newbalanceDest": tx.dest_new_bal,
         }])
-
-        prediction = model.predict(df)
-        proba = model.predict_proba(df)[0][1]
-
+        dmatrix = xgb.DMatrix(df)
+        
+        proba = float(model.predict(dmatrix)[0])
+        prediction = int(proba >= 0.5)
     except (ValueError, OverflowError, OSError) as e:
-        # e.g. transaction_time out of range for datetime.fromtimestamp
         logger.warning("Bad input for transaction %s: %s", tx.transaction_id, e)
         raise HTTPException(status_code=422, detail=f"Invalid input: {e}")
 
     except Exception as e:
-        # Catch-all so a model/inference error returns a clean 500
-        # instead of an unhandled traceback leaking to the client.
         logger.error("Prediction failed for transaction %s: %s",
                      tx.transaction_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail="Internal model inference error")
 
     logger.info(
         "Scored transaction_id=%s prediction=%s proba=%.4f",
-        tx.transaction_id, int(prediction[0]), float(proba),
+        tx.transaction_id,prediction,proba,
     )
 
     return {
         "transaction_id": tx.transaction_id,
-        "user": tx.source_user_id,
-        "prediction": int(prediction[0]),
-        "fraud_probability": float(proba),
+        "prediction": prediction,
+        "fraud_probability": proba,
     }
